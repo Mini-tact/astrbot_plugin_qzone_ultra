@@ -13,6 +13,31 @@ from .utils import truncate
 
 TAG_RE = re.compile(r"<[^>]+>")
 EM_RE = re.compile(r"\[em\].*?\[/em\]")
+NICKNAME_KEYS = (
+    "nickname",
+    "nickName",
+    "nick_name",
+    "nick",
+    "name",
+    "uinname",
+    "userName",
+    "username",
+    "ownerName",
+    "displayName",
+)
+NICKNAME_CONTAINER_KEYS = (
+    "userinfo",
+    "userInfo",
+    "user",
+    "owner",
+    "author",
+    "poster",
+    "host",
+    "profile",
+    "blogInfo",
+    "cell_userinfo",
+)
+USER_ID_KEYS = ("uin", "hostuin", "hostUin", "user_id", "userId", "qq", "uinnum")
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -46,6 +71,25 @@ def _first_text(raw: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _clean_nickname(value: Any, *, hostuin: int = 0) -> str:
+    text = clean_qzone_text(value)
+    if not text:
+        return ""
+    if hostuin and text == str(hostuin):
+        return ""
+    return text
+
+
+def _first_nickname(raw: dict[str, Any], *, hostuin: int = 0) -> str:
+    if not _owner_matches(raw, hostuin=hostuin):
+        return ""
+    for key in NICKNAME_KEYS:
+        nickname = _clean_nickname(raw.get(key), hostuin=hostuin)
+        if nickname:
+            return nickname
+    return ""
+
+
 def _iter_mappings(value: Any) -> Iterable[dict[str, Any]]:
     if isinstance(value, dict):
         yield value
@@ -53,6 +97,62 @@ def _iter_mappings(value: Any) -> Iterable[dict[str, Any]]:
         for item in value:
             if isinstance(item, dict):
                 yield item
+
+
+def _nested_mapping(raw: dict[str, Any], *keys: str) -> dict[str, Any]:
+    current: Any = raw
+    for key in keys:
+        if not isinstance(current, dict):
+            return {}
+        current = current.get(key)
+    return current if isinstance(current, dict) else {}
+
+
+def _mapping_uin(raw: dict[str, Any]) -> int:
+    for key in USER_ID_KEYS:
+        value = raw.get(key)
+        if value not in (None, ""):
+            return _to_int(value)
+    return 0
+
+
+def _owner_matches(raw: dict[str, Any], *, hostuin: int = 0) -> bool:
+    owner_uin = _mapping_uin(raw)
+    return not hostuin or not owner_uin or owner_uin == hostuin
+
+
+def extract_nickname(raw: dict[str, Any] | None, *, hostuin: int = 0) -> str:
+    """Best-effort owner nickname extraction from common Qzone feed/detail shapes."""
+
+    if not isinstance(raw, dict):
+        return ""
+
+    for key in NICKNAME_CONTAINER_KEYS:
+        for item in _iter_mappings(raw.get(key)):
+            nickname = _first_nickname(item, hostuin=hostuin)
+            if nickname:
+                return nickname
+
+    for path in (
+        ("data", "userinfo"),
+        ("data", "userInfo"),
+        ("data", "user"),
+        ("data", "owner"),
+        ("data", "feed", "userinfo"),
+        ("feed", "userinfo"),
+        ("feed", "user"),
+        ("entry", "userinfo"),
+        ("entry", "user"),
+    ):
+        nickname = _first_nickname(_nested_mapping(raw, *path), hostuin=hostuin)
+        if nickname:
+            return nickname
+
+    direct = _first_nickname(raw, hostuin=hostuin)
+    if direct:
+        return direct
+
+    return ""
 
 
 @dataclass(slots=True)
@@ -101,9 +201,12 @@ class QzonePost:
         prefix = f"{index}. " if index is not None else ""
         saved = f"稿件 #{self.saved_id} | " if self.saved_id else ""
         liked = "已赞" if self.liked else "未赞"
-        name = self.nickname or str(self.hostuin or "")
+        name = extract_nickname({"nickname": self.nickname}, hostuin=self.hostuin)
+        if not name:
+            name = extract_nickname(self.raw, hostuin=self.hostuin)
+        name = name or "QQ 空间用户"
         return (
-            f"{prefix}{saved}{name}({self.hostuin})\n"
+            f"{prefix}{saved}{name}\n"
             f"{truncate(self.summary, 220)}\n"
             f"{liked} | {self.like_count} 赞 | {self.comment_count} 评论"
         )
@@ -211,12 +314,13 @@ def extract_images(payload: dict[str, Any]) -> list[str]:
 def post_from_entry(entry: FeedEntry, *, detail: dict[str, Any] | None = None, local_id: int = 0) -> QzonePost:
     raw = detail if isinstance(detail, dict) else entry.raw
     comments = extract_comments(raw or {})
+    nickname = _clean_nickname(entry.nickname, hostuin=entry.hostuin) or extract_nickname(raw or {}, hostuin=entry.hostuin)
     return QzonePost(
         hostuin=entry.hostuin,
         fid=entry.fid,
         appid=entry.appid,
         summary=clean_qzone_text(entry.summary),
-        nickname=entry.nickname,
+        nickname=nickname,
         created_at=entry.created_at,
         like_count=entry.like_count,
         comment_count=max(entry.comment_count, len(comments)),
