@@ -181,8 +181,31 @@ IMAGE_HTML_KEYS = (
     "message",
     "text",
 )
-FEED_ID_KEYS = ("fid", "tid", "cellid", "feedid", "feedId", "key", "ugckey", "ugcrightkey")
+FEED_ID_KEYS = ("fid", "tid", "cellid", "feedid", "feedId", "ugckey", "ugcrightkey")
+FEED_FALLBACK_ID_KEYS = ("key",)
 FEED_ID_CONTAINER_KEYS = ("common", "cell_comm", "cellComm", "id")
+FEED_NODE_HINT_KEYS = (
+    "summary",
+    "content",
+    "con",
+    "msg",
+    "message",
+    "text",
+    "html",
+    "htmlContent",
+    "common",
+    "cell_comm",
+    "cellComm",
+    "userinfo",
+    "user",
+    "owner",
+    "operation",
+    "like",
+    "comment",
+    "feed",
+    "original",
+    "data",
+)
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -192,6 +215,21 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(value)
     except Exception:
         return default
+
+
+def _json_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    text = unescape(value).strip()
+    if not text or text[0] != "{" or len(text) > 200_000:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def clean_qzone_text(value: Any) -> str:
@@ -515,11 +553,16 @@ def extract_images(payload: dict[str, Any], *, fid: str = "", hostuin: int = 0) 
             candidate = value.get(key)
             if candidate not in (None, ""):
                 return str(candidate)
+        if not best_mapping_image_source(value) and any(key in value for key in FEED_NODE_HINT_KEYS):
+            for key in FEED_FALLBACK_ID_KEYS:
+                candidate = value.get(key)
+                if candidate not in (None, ""):
+                    return str(candidate)
         for key in FEED_ID_CONTAINER_KEYS:
-            child = value.get(key)
-            if not isinstance(child, dict):
+            child = _json_mapping(value.get(key))
+            if not child:
                 continue
-            for child_key in FEED_ID_KEYS:
+            for child_key in (*FEED_ID_KEYS, *FEED_FALLBACK_ID_KEYS):
                 candidate = child.get(child_key)
                 if candidate not in (None, ""):
                     return str(candidate)

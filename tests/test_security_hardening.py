@@ -2119,6 +2119,25 @@ def test_extract_images_collapses_aliases_from_one_qzone_photo_object() -> None:
     assert extract_images(payload) == ["https://m.qpic.cn/one-photo-original.jpg"]
 
 
+def test_extract_images_keeps_current_photo_when_photo_has_storage_key() -> None:
+    from qzone_bridge.social import extract_images
+
+    payload = {
+        "fid": "fid-with-image",
+        "hostuin": 12345,
+        "picdata": {
+            "0": {
+                "key": "photo-storage-key",
+                "url3": "https://m.qpic.cn/current-photo.jpg",
+            }
+        },
+    }
+
+    assert extract_images(payload, fid="fid-with-image", hostuin=12345) == [
+        "https://m.qpic.cn/current-photo.jpg"
+    ]
+
+
 def test_post_from_entry_scopes_detail_images_to_current_fid() -> None:
     from qzone_bridge.models import FeedEntry
     from qzone_bridge.social import post_from_entry
@@ -2139,6 +2158,35 @@ def test_post_from_entry_scopes_detail_images_to_current_fid() -> None:
                 "fid": "fid-with-image",
                 "summary": "想我吗",
                 "pic": [{"url3": "https://m.qpic.cn/neighbor-image.jpg"}],
+            },
+        ],
+    }
+
+    post = post_from_entry(entry, detail=detail_payload_with_neighbor_feed, local_id=2)
+
+    assert post.images == []
+
+
+def test_post_from_entry_scopes_json_cell_comm_neighbor_images_to_current_fid() -> None:
+    from qzone_bridge.models import FeedEntry
+    from qzone_bridge.social import post_from_entry
+
+    entry = FeedEntry(
+        hostuin=12345,
+        fid="fid-text-only",
+        appid=311,
+        summary="hello",
+        raw={"fid": "fid-text-only", "summary": "hello"},
+    )
+    detail_payload_with_neighbor_feed = {
+        "fid": "fid-text-only",
+        "summary": "hello",
+        "feed": [
+            {"cell_comm": '{"fid":"fid-text-only"}', "summary": "hello"},
+            {
+                "cell_comm": '{"fid":"fid-with-image"}',
+                "summary": "想我吗",
+                "pic": [{"url3": "https://m.qpic.cn/neighbor-json-cell.jpg"}],
             },
         ],
     }
